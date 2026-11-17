@@ -34,6 +34,9 @@ extern int fake_mdb_cnt;
 extern int fake_overflow_once;
 extern uint32_t fake_overflow_needed;
 
+/* The next fake_fail_count requests of fake_fail_type return fake_fail_status */
+extern int fake_fail_type, fake_fail_status, fake_fail_count;
+
 /* Number of mcs_nl_read_event() calls so far */
 extern int fake_read_event_calls;
 

@@ -21,6 +21,7 @@ int fake_mdb_cnt;
 int fake_overflow_once;
 uint32_t fake_overflow_needed;
 int fake_read_event_calls;
+int fake_fail_type, fake_fail_status, fake_fail_count;
 
 static int open_cnt;
 static int event_pipe[2] = { -1, -1 };
@@ -40,6 +41,7 @@ void fake_reset(void)
 	fake_req_cnt = fake_open_fail = fake_mdb_cnt = 0;
 	fake_overflow_once = fake_read_event_calls = 0;
 	fake_overflow_needed = 0;
+	fake_fail_type = fake_fail_status = fake_fail_count = 0;
 	open_cnt = event_cnt = event_pos = 0;
 }
 
@@ -86,6 +88,11 @@ int mcs_nl_request(int fd, uint32_t portid, int type, const char *bridge,
 	strncpy(req->bridge, bridge, IFNAMSIZ - 1);
 	req->len = len;
 	memcpy(req->data, data, len < sizeof(req->data) ? len : sizeof(req->data));
+
+	if (fake_fail_count > 0 && type == fake_fail_type) {
+		--fake_fail_count;
+		return fake_fail_status;
+	}
 
 	if (type == MCS_MSG_GET_MDB) {
 		uint32_t bytes = fake_mdb_cnt * sizeof(fake_mdb[0]);

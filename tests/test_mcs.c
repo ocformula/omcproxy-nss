@@ -305,6 +305,112 @@ static void test_timer_refreshes_all(void)
 	teardown();
 }
 
+static void fail_next(int type, int count)
+{
+	fake_fail_type = type;
+	fake_fail_status = 5;	/* MC_STATUS_FAILURE */
+	fake_fail_count = count;
+}
+
+static void run_timer(void)
+{
+	for (int i = 0; i < 8; ++i)
+		uloop_run_timeout(MCS_REFRESH_MS);
+}
+
+/* A bridge must not be left half configured: the module defaults to dropping */
+static void test_policy_failure_disables_and_retries(void)
+{
+	setup();
+	fail_next(MCS_MSG_SET_POLICY, 1);
+	mcs_init();
+	mcs_attach(100);
+
+	assert(fake_req_cnt == 4);
+	assert(fake_reqs[1].type == MCS_MSG_SET_ENABLE && req_val(1, 0) == 1);
+	assert(fake_reqs[2].type == MCS_MSG_SET_POLICY);
+	assert(fake_reqs[3].type == MCS_MSG_SET_ENABLE && req_val(3, 0) == 0);
+
+	run_timer();
+	assert(count_reqs(4, MCS_MSG_SET_RETAG, "br100", -1) >= 1);
+	assert(count_reqs(4, MCS_MSG_SET_PSW_FLOOD, "br100", -1) >= 1);
+	assert(count_reqs(4, MCS_MSG_SET_ENABLE, "br100", 0) == 0);
+	teardown();
+}
+
+static void test_retag_failure_disables(void)
+{
+	setup();
+	fail_next(MCS_MSG_SET_RETAG, 1);
+	mcs_init();
+	mcs_attach(100);
+
+	assert(fake_req_cnt == 5);
+	assert(fake_reqs[3].type == MCS_MSG_SET_RETAG);
+	assert(fake_reqs[4].type == MCS_MSG_SET_ENABLE && req_val(4, 0) == 0);
+	teardown();
+}
+
+static void test_enable_failure_retries(void)
+{
+	setup();
+	fail_next(MCS_MSG_SET_ENABLE, 1);
+	mcs_init();
+	mcs_attach(100);
+
+	assert(fake_req_cnt == 2);
+	assert(fake_reqs[1].type == MCS_MSG_SET_ENABLE && req_val(1, 0) == 1);
+
+	run_timer();
+	assert(count_reqs(2, MCS_MSG_SET_PSW_FLOOD, "br100", -1) >= 1);
+	teardown();
+}
+
+/* Snooping was disabled behind our back, or the bridge was recreated */
+static void test_refresh_recovers_lost_state(void)
+{
+	static const int expect[] = { MCS_MSG_GET_MDB, MCS_MSG_SET_ENABLE,
+		MCS_MSG_SET_POLICY, MCS_MSG_SET_RETAG, MCS_MSG_GET_MDB,
+		MCS_MSG_SET_PSW_FLOOD };
+	int mark;
+
+	setup();
+	mcs_init();
+	mcs_attach(100);
+	mark = fake_req_cnt;
+
+	fail_next(MCS_MSG_GET_MDB, 1);
+	fake_queue_event("br100");
+	uloop_run_timeout(1000);
+
+	assert(fake_req_cnt - mark == 6);
+	for (int i = 0; i < 6; ++i)
+		assert(fake_reqs[mark + i].type == expect[i]);
+
+	assert(req_val(mark + 1, 0) == 1);
+	teardown();
+}
+
+static void test_refresh_gives_up_until_next_time(void)
+{
+	int mark;
+
+	setup();
+	mcs_init();
+	mcs_attach(100);
+	mark = fake_req_cnt;
+
+	fail_next(MCS_MSG_GET_MDB, 2);
+	fake_queue_event("br100");
+	uloop_run_timeout(1000);
+
+	/* One reconfiguration and one retry, then wait for the next trigger */
+	assert(fake_req_cnt - mark == 5);
+	assert(fake_reqs[mark + 4].type == MCS_MSG_GET_MDB);
+	assert(count_reqs(mark, MCS_MSG_SET_PSW_FLOOD, NULL, -1) == 0);
+	teardown();
+}
+
 static void test_deinit_disables(void)
 {
 	int mark;
@@ -346,6 +452,11 @@ int main(void)
 	test_event_triggers_refresh();
 	test_event_for_unknown_bridge();
 	test_timer_refreshes_all();
+	test_policy_failure_disables_and_retries();
+	test_retag_failure_disables();
+	test_enable_failure_retries();
+	test_refresh_recovers_lost_state();
+	test_refresh_gives_up_until_next_time();
 	test_deinit_disables();
 	printf("test_mcs: ok\n");
 	return 0;

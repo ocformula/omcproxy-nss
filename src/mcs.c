@@ -42,6 +42,8 @@ struct mcs_bridge {
 	char name[IFNAMSIZ];
 	int ifindex;
 	unsigned refs;
+	bool configured;
+	bool failing;
 };
 
 static void mcs_handle_event(struct uloop_fd *fd, unsigned events);
@@ -61,19 +63,81 @@ static bool mcs_available(void)
 
 static int mcs_set(const char *bridge, int type, void *data, uint32_t len)
 {
-	int ret = mcs_nl_request(req_fd, req_port, type, bridge, data, len, NULL, NULL);
-
-	if (ret)
-		L_WARN("mcs: %s: request %d failed (%d)", bridge, type, ret);
-
-	return ret;
+	return mcs_nl_request(req_fd, req_port, type, bridge, data, len, NULL, NULL);
 }
 
-static void mcs_set_value(const char *bridge, int type, uint32_t val)
+static int mcs_set_value(const char *bridge, int type, uint32_t val)
 {
 	struct mcs_param_value param = { .val = val };
 
-	mcs_set(bridge, type, &param, sizeof(param));
+	return mcs_set(bridge, type, &param, sizeof(param));
+}
+
+/* Report a failure once, not on every retry */
+static void mcs_failed(struct mcs_bridge *bridge, const char *what, int ret)
+{
+	if (!bridge->failing)
+		L_WARN("mcs: %s: %s failed (%d)", bridge->name, what, ret);
+
+	bridge->failing = true;
+}
+
+/*
+ * Enable snooping on a bridge. Groups without members keep being flooded as
+ * the bridge would do, and the DSCP of snooped groups is left alone.
+ */
+static bool mcs_configure(struct mcs_bridge *bridge)
+{
+	struct mcs_param_retag retag = { .enable = 0, .dscp = 0 };
+	int ret;
+
+	if ((ret = mcs_set_value(bridge->name, MCS_MSG_SET_ENABLE, 1))) {
+		mcs_failed(bridge, "enabling snooping", ret);
+		return false;
+	}
+
+	if ((ret = mcs_set_value(bridge->name, MCS_MSG_SET_POLICY, MCS_POLICY_FLOOD)) ||
+			(ret = mcs_set(bridge->name, MCS_MSG_SET_RETAG, &retag, sizeof(retag)))) {
+		/* The module defaults to dropping and remarking: do not leave it like that */
+		mcs_set_value(bridge->name, MCS_MSG_SET_ENABLE, 0);
+		mcs_failed(bridge, "configuring snooping", ret);
+		return false;
+	}
+
+	bridge->configured = true;
+	return true;
+}
+
+/* Read the snooping table of a bridge; the caller frees *mdb */
+static int mcs_read_mdb(struct mcs_bridge *bridge, struct mcs_mdb_entry **mdb, size_t *cnt)
+{
+	size_t mdb_max = MCS_MDB_INITIAL;
+	uint32_t written = 0, needed = 0;
+	int ret = -1;
+
+	*mdb = NULL;
+	for (int i = 0; i < 2; ++i) {
+		struct mcs_mdb_entry *n = realloc(*mdb, mdb_max * sizeof(*n));
+
+		if (!n)
+			return -1;
+
+		*mdb = n;
+		ret = mcs_nl_request(req_fd, req_port, MCS_MSG_GET_MDB, bridge->name,
+				n, mdb_max * sizeof(*n), &written, &needed);
+		if (ret != MCS_STATUS_BUFFER_OVERFLOW)
+			break;
+
+		mdb_max = needed / sizeof(*n) + 1;
+		if (mdb_max > MCS_MDB_MAX)
+			mdb_max = MCS_MDB_MAX;
+	}
+
+	if (written > mdb_max * sizeof(**mdb))
+		written = mdb_max * sizeof(**mdb);
+
+	*cnt = written / sizeof(**mdb);
+	return ret;
 }
 
 /*
@@ -87,44 +151,41 @@ static void mcs_refresh(struct mcs_bridge *bridge, const char *reason)
 {
 	static struct mcs_flood_entry flood[MCS_FLOOD_MAX];
 	struct mcs_mdb_entry *mdb = NULL;
-	size_t mdb_max = MCS_MDB_INITIAL;
-	uint32_t written = 0, needed = 0;
-	size_t groups;
+	size_t cnt = 0, groups;
 	int ret;
 
-	for (int i = 0; i < 2; ++i) {
-		struct mcs_mdb_entry *n = realloc(mdb, mdb_max * sizeof(*mdb));
-
-		if (!n) {
-			free(mdb);
+	for (int attempt = 0; ; ++attempt) {
+		if (!bridge->configured && !mcs_configure(bridge))
 			return;
-		}
 
-		mdb = n;
-		ret = mcs_nl_request(req_fd, req_port, MCS_MSG_GET_MDB, bridge->name,
-				mdb, mdb_max * sizeof(*mdb), &written, &needed);
-		if (ret != MCS_STATUS_BUFFER_OVERFLOW)
+		if (!(ret = mcs_read_mdb(bridge, &mdb, &cnt)))
 			break;
 
-		mdb_max = needed / sizeof(*mdb) + 1;
-		if (mdb_max > MCS_MDB_MAX)
-			mdb_max = MCS_MDB_MAX;
+		free(mdb);
+
+		/*
+		 * The module refuses when snooping is no longer enabled, e.g.
+		 * the bridge was recreated: configure it again and retry once.
+		 */
+		if (ret > 0 && ret != MCS_STATUS_BUFFER_OVERFLOW)
+			bridge->configured = false;
+
+		if (attempt || bridge->configured) {
+			mcs_failed(bridge, "reading the snooping table", ret);
+			return;
+		}
 	}
 
-	if (ret) {
-		L_WARN("mcs: %s: failed to read snooping table (%d)", bridge->name, ret);
-		free(mdb);
+	groups = mcs_build_flood(mdb, cnt, flood, MCS_FLOOD_MAX);
+	free(mdb);
+
+	if ((ret = mcs_set(bridge->name, MCS_MSG_SET_PSW_FLOOD, flood, groups * sizeof(*flood)))) {
+		mcs_failed(bridge, "writing the flood table", ret);
 		return;
 	}
 
-	if (written > mdb_max * sizeof(*mdb))
-		written = mdb_max * sizeof(*mdb);
-
-	groups = mcs_build_flood(mdb, written / sizeof(*mdb), flood, MCS_FLOOD_MAX);
-	free(mdb);
-
-	if (!mcs_set(bridge->name, MCS_MSG_SET_PSW_FLOOD, flood, groups * sizeof(*flood)))
-		L_INFO("mcs: %s: %zu groups (%s)", bridge->name, groups, reason);
+	bridge->failing = false;
+	L_INFO("mcs: %s: %zu groups (%s)", bridge->name, groups, reason);
 }
 
 static struct mcs_bridge* mcs_find(int ifindex, const char *name)
@@ -237,7 +298,6 @@ void mcs_deinit(void)
 
 void mcs_attach(int ifindex)
 {
-	struct mcs_param_retag retag = { .enable = 0, .dscp = 0 };
 	struct mcs_bridge *bridge;
 	char name[IFNAMSIZ];
 
@@ -261,12 +321,8 @@ void mcs_attach(int ifindex)
 	/*
 	 * Always (re)configure: snooping may still be enabled with a stale
 	 * table if a previous instance did not get to clean up.
-	 * Groups without members keep being flooded as the bridge would do,
-	 * and the DSCP of snooped groups is left alone.
 	 */
-	mcs_set_value(bridge->name, MCS_MSG_SET_ENABLE, 1);
-	mcs_set_value(bridge->name, MCS_MSG_SET_POLICY, MCS_POLICY_FLOOD);
-	mcs_set(bridge->name, MCS_MSG_SET_RETAG, &retag, sizeof(retag));
+	bridge->configured = false;
 	mcs_refresh(bridge, "attach");
 }
 

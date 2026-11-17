@@ -101,9 +101,9 @@ static void proxy_trigger(struct querier_user_iface *user, const struct in6_addr
 
 	// Routes of this group were set up for the previous group-state: a stream
 	// that arrived before its first receiver would otherwise stay unforwarded
-	// until its route expires. Drop them to have its sources evaluated again.
+	// until its route expires. Have its sources evaluated again.
 	struct proxy *proxy = container_of(user->user.querier, struct proxy, querier);
-	mrib_flush(&proxy->mrib, group, 128, NULL);
+	mrib_refresh(&proxy->mrib, group);
 }
 
 // Remove proxy with given name

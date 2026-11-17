@@ -30,11 +30,9 @@ static struct mrib_user *uplink_mrib;
 static struct querier_iface fake_iface;
 
 static int client_set_calls;
-static int flush_calls;
-static struct mrib_user *flush_user;
-static struct in6_addr flush_group;
-static uint8_t flush_plen;
-static const struct in6_addr *flush_source;
+static int refresh_calls;
+static struct mrib_user *refresh_user;
+static struct in6_addr refresh_group;
 
 /* Fakes */
 int querier_init(struct querier *querier)
@@ -87,14 +85,11 @@ int mrib_attach_user(struct mrib_user *user, int ifindex, mrib_cb *cb_newsource)
 void mrib_detach_user(__unused struct mrib_user *user) {}
 int mrib_filter_add(__unused mrib_filter *filter, __unused struct mrib_user *user) { return 0; }
 
-int mrib_flush(struct mrib_user *user, const struct in6_addr *group, uint8_t group_plen,
-		const struct in6_addr *source)
+int mrib_refresh(struct mrib_user *user, const struct in6_addr *group)
 {
-	++flush_calls;
-	flush_user = user;
-	flush_group = *group;
-	flush_plen = group_plen;
-	flush_source = source;
+	++refresh_calls;
+	refresh_user = user;
+	refresh_group = *group;
 	return 0;
 }
 
@@ -121,7 +116,7 @@ static void setup(void)
 {
 	static const int downlinks[] = { DOWNLINK };
 
-	client_set_calls = flush_calls = 0;
+	client_set_calls = refresh_calls = 0;
 	downlink_user = NULL;
 	uplink_mrib = NULL;
 	assert(!proxy_set(UPLINK, downlinks, 1, 0));
@@ -137,9 +132,9 @@ static void teardown(void)
 /*
  * A stream can reach us before the first membership report, e.g. right after
  * a restart. Its route is then installed without the downlink, and has to be
- * dropped when the membership shows up so that the stream gets re-evaluated.
+ * re-evaluated when the membership shows up.
  */
-static void test_membership_change_flushes_routes(void)
+static void test_membership_change_refreshes_routes(void)
 {
 	struct in6_addr group = mapped("233.18.158.251");
 
@@ -147,11 +142,9 @@ static void test_membership_change_flushes_routes(void)
 	downlink_cb(downlink_user, &group, false, NULL, 0);
 
 	assert(client_set_calls == 1);
-	assert(flush_calls == 1);
-	assert(flush_user == uplink_mrib);
-	assert(IN6_ARE_ADDR_EQUAL(&flush_group, &group));
-	assert(flush_plen == 128);
-	assert(flush_source == NULL);
+	assert(refresh_calls == 1);
+	assert(refresh_user == uplink_mrib);
+	assert(IN6_ARE_ADDR_EQUAL(&refresh_group, &group));
 	teardown();
 }
 
@@ -163,13 +156,13 @@ static void test_out_of_scope_group_is_ignored(void)
 	downlink_cb(downlink_user, &group, false, NULL, 0);
 
 	assert(client_set_calls == 0);
-	assert(flush_calls == 0);
+	assert(refresh_calls == 0);
 	teardown();
 }
 
 int main(void)
 {
-	test_membership_change_flushes_routes();
+	test_membership_change_refreshes_routes();
 	test_out_of_scope_group_is_ignored();
 	printf("test_proxy: ok\n");
 	return 0;

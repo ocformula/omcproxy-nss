@@ -721,6 +721,33 @@ int mrib_flush(struct mrib_user *user, const struct in6_addr *group, uint8_t gro
 	return (found) ? 0 : -ENOENT;
 }
 
+// Re-evaluate the outputs of the routes of a group, keeping the routes:
+// updating an existing kernel route does not drop packets of the stream
+int mrib_refresh(struct mrib_user *user, const struct in6_addr *group)
+{
+	struct mrib_iface *iface = user->iface;
+	if (!iface)
+		return -ENOENT;
+
+	bool found = false;
+	struct mrib_route *route;
+	list_for_each_entry(route, &iface->routes, head) {
+		if (!IN6_ARE_ADDR_EQUAL(&route->group, group))
+			continue;
+
+		mrib_filter filter = 0;
+		struct mrib_user *u;
+		list_for_each_entry(u, &iface->users, head)
+			if (u->cb_newsource)
+				u->cb_newsource(u, &route->group, &route->source, &filter);
+
+		mrib_set(&route->group, &route->source, iface, filter, 0);
+		found = true;
+	}
+
+	return (found) ? 0 : -ENOENT;
+}
+
 // Add an interface to the filter
 int mrib_filter_add(mrib_filter *filter, struct mrib_user *user)
 {

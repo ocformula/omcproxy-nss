@@ -29,6 +29,10 @@ $CC $CFLAGS -DMCS_REFRESH_MS=50 -I"$LIBUBOX_DIR" -Itests \
 	-o "$OUT/test_mcs"
 "$OUT/test_mcs"
 
+# The mrib test includes src/mrib.c and fakes setsockopt
+$CC $CFLAGS -Wno-unused-function -I"$LIBUBOX_DIR" tests/test_mrib.c "$OUT/uloop.o" -o "$OUT/test_mrib"
+"$OUT/test_mrib"
+
 # The proxy test replaces the querier, client, routing table and qca-mcs
 $CC $CFLAGS -Wno-error=misleading-indentation -I"$LIBUBOX_DIR" \
 	tests/test_proxy.c src/proxy.c -o "$OUT/test_proxy"

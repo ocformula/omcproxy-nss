@@ -77,6 +77,9 @@ void mrib_detach_querier(struct mrib_querier *querier);
 // Flush state for a multicast route
 int mrib_flush(struct mrib_user *user, const struct in6_addr *group, uint8_t group_plen, const struct in6_addr *source);
 
+// Re-evaluate the outputs of the multicast routes of a group in place
+int mrib_refresh(struct mrib_user *user, const struct in6_addr *group);
+
 // Add interface to filter
 int mrib_filter_add(mrib_filter *filter, struct mrib_user *user);
 

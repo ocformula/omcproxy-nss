@@ -4,8 +4,8 @@ CMakeCache.txt
 CMakeFiles
 CMakeScripts
 cmake_install.cmake
-Makefile
-omcproxy
+/Makefile
+/omcproxy
 CTestTestfile.cmake
 Testing
 coverage.info

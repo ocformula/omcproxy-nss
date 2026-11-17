@@ -29,4 +29,9 @@ $CC $CFLAGS -DMCS_REFRESH_MS=50 -I"$LIBUBOX_DIR" -Itests \
 	-o "$OUT/test_mcs"
 "$OUT/test_mcs"
 
+# The proxy test replaces the querier, client, routing table and qca-mcs
+$CC $CFLAGS -Wno-error=misleading-indentation -I"$LIBUBOX_DIR" \
+	tests/test_proxy.c src/proxy.c -o "$OUT/test_proxy"
+"$OUT/test_proxy"
+
 echo "ALL PASS"

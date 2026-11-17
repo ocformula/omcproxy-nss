@@ -94,8 +94,16 @@ static void proxy_trigger(struct querier_user_iface *user, const struct in6_addr
 		bool include, const struct in6_addr *sources, size_t len)
 {
 	struct proxy_downlink *iface = container_of(user, struct proxy_downlink, iface);
-	if (proxy_match_scope(iface->flags, group))
-		client_set(&iface->client, group, include, sources, len);
+	if (!proxy_match_scope(iface->flags, group))
+		return;
+
+	client_set(&iface->client, group, include, sources, len);
+
+	// Routes of this group were set up for the previous group-state: a stream
+	// that arrived before its first receiver would otherwise stay unforwarded
+	// until its route expires. Drop them to have its sources evaluated again.
+	struct proxy *proxy = container_of(user->user.querier, struct proxy, querier);
+	mrib_flush(&proxy->mrib, group, 128, NULL);
 }
 
 // Remove proxy with given name

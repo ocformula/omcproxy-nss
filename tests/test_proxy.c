@@ -19,15 +19,26 @@
 #include "mcs.h"
 
 #define UPLINK 15
+#define UPLINK2 16
 #define DOWNLINK 10
 
 int log_level = 0;
+
+/* Same layout as struct proxy_downlink in proxy.c */
+struct proxy_downlink_view {
+	struct querier_user_iface iface;
+	struct mrib_user mrib;
+	struct client client;
+	enum proxy_flags flags;
+};
 
 /* What the fakes saw */
 static struct querier_user_iface *downlink_user;
 static querier_iface_cb *downlink_cb;
 static struct mrib_user *uplink_mrib;
 static struct querier_iface fake_iface;
+static enum proxy_flags flags_seen_by_cb;
+static int querier_attach_calls, querier_detach_calls;
 
 static int client_set_calls;
 static int refresh_calls;
@@ -53,12 +64,17 @@ int querier_attach(struct querier_user_iface *user, struct querier *querier,
 	list_add(&user->user.head, &querier->ifaces);
 	downlink_user = user;
 	downlink_cb = cb;
+	++querier_attach_calls;
+
+	/* The real querier can report members right away */
+	flags_seen_by_cb = container_of(user, struct proxy_downlink_view, iface)->flags;
 	return 0;
 }
 
 void querier_detach(struct querier_user_iface *user)
 {
 	list_del(&user->user.head);
+	++querier_detach_calls;
 }
 
 int client_init(__unused struct client *client, __unused int ifindex) { return 0; }
@@ -75,8 +91,9 @@ int mrib_attach_user(struct mrib_user *user, int ifindex, mrib_cb *cb_newsource)
 {
 	/* The uplink is the one that wants to hear about new sources */
 	if (cb_newsource) {
-		assert(ifindex == UPLINK);
-		uplink_mrib = user;
+		assert(ifindex == UPLINK || ifindex == UPLINK2);
+		if (ifindex == UPLINK)
+			uplink_mrib = user;
 	}
 
 	return 0;
@@ -117,6 +134,8 @@ static void setup(void)
 	static const int downlinks[] = { DOWNLINK };
 
 	client_set_calls = refresh_calls = 0;
+	querier_attach_calls = querier_detach_calls = 0;
+	flags_seen_by_cb = 0;
 	downlink_user = NULL;
 	uplink_mrib = NULL;
 	assert(!proxy_set(UPLINK, downlinks, 1, 0));
@@ -160,10 +179,45 @@ static void test_out_of_scope_group_is_ignored(void)
 	teardown();
 }
 
+/* E.g. one proxy for IPv4 (wan_premium) and one for IPv6 (wan6) to the LAN */
+static void test_second_proxy(void)
+{
+	static const int downlinks[] = { DOWNLINK };
+
+	setup();
+	assert(!proxy_set(UPLINK2, downlinks, 1, 0));
+	assert(querier_attach_calls == 2);
+	assert(querier_detach_calls == 0);
+	teardown();
+}
+
+/* Setting a proxy again with the same downlinks keeps them */
+static void test_set_same_proxy_again(void)
+{
+	static const int downlinks[] = { DOWNLINK };
+
+	setup();
+	assert(!proxy_set(UPLINK, downlinks, 1, 0));
+	assert(querier_attach_calls == 1);
+	assert(querier_detach_calls == 0);
+	teardown();
+}
+
+/* The querier may call back during attach, the scope must be set by then */
+static void test_downlink_scope_set_before_attach(void)
+{
+	setup();
+	assert(flags_seen_by_cb == PROXY_GLOBAL);
+	teardown();
+}
+
 int main(void)
 {
 	test_membership_change_refreshes_routes();
 	test_out_of_scope_group_is_ignored();
+	test_second_proxy();
+	test_set_same_proxy_again();
+	test_downlink_scope_set_before_attach();
 	printf("test_proxy: ok\n");
 	return 0;
 }

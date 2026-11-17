@@ -135,8 +135,12 @@ static int proxy_unset(struct proxy *proxyp)
 int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum proxy_flags flags)
 {
 	struct proxy *proxy = NULL, *p;
+
+	if ((flags & _PROXY_SCOPEMASK) == 0)
+		flags |= PROXY_GLOBAL;
+
 	list_for_each_entry(p, &proxies, head)
-		if (proxy->ifindex == uplink)
+		if (p->ifindex == uplink)
 			proxy = p;
 
 	if (proxy && (downlinks_cnt == 0 ||
@@ -152,9 +156,6 @@ int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum prox
 		if (!(proxy = calloc(1, sizeof(*proxy))))
 			return -ENOMEM;
 
-		if ((flags & _PROXY_SCOPEMASK) == 0)
-			flags |= PROXY_GLOBAL;
-
 		proxy->flags = flags;
 		proxy->ifindex = uplink;
 		querier_init(&proxy->querier);
@@ -168,9 +169,9 @@ int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum prox
 		struct querier_user_iface *iface = container_of(user, struct querier_user_iface, user);
 
 		size_t i;
-		for (i = 0; i < downlinks_cnt && downlinks[i] == iface->iface->ifindex; ++i);
-			if (i == downlinks_cnt)
-				proxy_remove_downlink(container_of(iface, struct proxy_downlink, iface));
+		for (i = 0; i < downlinks_cnt && downlinks[i] != iface->iface->ifindex; ++i);
+		if (i == downlinks_cnt)
+			proxy_remove_downlink(container_of(iface, struct proxy_downlink, iface));
 	}
 
 	for (size_t i = 0; i < downlinks_cnt; ++i) {
@@ -200,10 +201,11 @@ int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum prox
 		// Snooping has to be on before the querier asks for members
 		mcs_attach(downlinks[i]);
 
+		// The querier can report members during attach
+		downlink->flags = proxy->flags;
 		if (querier_attach(&downlink->iface, &proxy->querier, downlinks[i], proxy_trigger))
 			goto downlink_err1;
 
-		downlink->flags = proxy->flags;
 		continue;
 
 downlink_err1:

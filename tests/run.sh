@@ -34,7 +34,7 @@ $CC $CFLAGS -Wno-unused-function -I"$LIBUBOX_DIR" tests/test_mrib.c "$OUT/uloop.
 "$OUT/test_mrib"
 
 # The proxy test replaces the querier, client, routing table and qca-mcs
-$CC $CFLAGS -Wno-error=misleading-indentation -I"$LIBUBOX_DIR" \
+$CC $CFLAGS -I"$LIBUBOX_DIR" \
 	tests/test_proxy.c src/proxy.c -o "$OUT/test_proxy"
 "$OUT/test_proxy"
 

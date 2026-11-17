@@ -404,10 +404,62 @@ static void test_refresh_gives_up_until_next_time(void)
 	fake_queue_event("br100");
 	uloop_run_timeout(1000);
 
-	/* One reconfiguration and one retry, then wait for the next trigger */
-	assert(fake_req_cnt - mark == 5);
+	/*
+	 * One reconfiguration and one retry, then snooping is turned off so
+	 * that the bridge floods instead of using a stale table
+	 */
+	assert(fake_req_cnt - mark == 6);
 	assert(fake_reqs[mark + 4].type == MCS_MSG_GET_MDB);
+	assert(fake_reqs[mark + 5].type == MCS_MSG_SET_ENABLE && req_val(mark + 5, 0) == 0);
 	assert(count_reqs(mark, MCS_MSG_SET_PSW_FLOOD, NULL, -1) == 0);
+
+	/* And everything is set up again on the next refresh */
+	run_timer();
+	assert(count_reqs(mark + 6, MCS_MSG_SET_ENABLE, "br100", 1) >= 1);
+	assert(count_reqs(mark + 6, MCS_MSG_SET_PSW_FLOOD, "br100", -1) >= 1);
+	teardown();
+}
+
+static void test_transport_error_disables(void)
+{
+	int mark;
+
+	setup();
+	mcs_init();
+	mcs_attach(100);
+	mark = fake_req_cnt;
+
+	fake_fail_type = MCS_MSG_GET_MDB;
+	fake_fail_status = -1;
+	fake_fail_count = 1;
+	fake_queue_event("br100");
+	uloop_run_timeout(1000);
+
+	assert(count_reqs(mark, MCS_MSG_SET_ENABLE, "br100", 0) == 1);
+	assert(count_reqs(mark, MCS_MSG_SET_PSW_FLOOD, NULL, -1) == 0);
+	teardown();
+}
+
+static void test_flood_write_failure_disables(void)
+{
+	int mark;
+
+	setup();
+	mcs_init();
+	mcs_attach(100);
+	mark = fake_req_cnt;
+
+	fail_next(MCS_MSG_SET_PSW_FLOOD, 1);
+	fake_queue_event("br100");
+	uloop_run_timeout(1000);
+
+	assert(fake_req_cnt - mark == 3);
+	assert(fake_reqs[mark].type == MCS_MSG_GET_MDB);
+	assert(fake_reqs[mark + 1].type == MCS_MSG_SET_PSW_FLOOD);
+	assert(fake_reqs[mark + 2].type == MCS_MSG_SET_ENABLE && req_val(mark + 2, 0) == 0);
+
+	run_timer();
+	assert(count_reqs(mark + 3, MCS_MSG_SET_PSW_FLOOD, "br100", -1) >= 1);
 	teardown();
 }
 
@@ -457,6 +509,8 @@ int main(void)
 	test_enable_failure_retries();
 	test_refresh_recovers_lost_state();
 	test_refresh_gives_up_until_next_time();
+	test_transport_error_disables();
+	test_flood_write_failure_disables();
 	test_deinit_disables();
 	printf("test_mcs: ok\n");
 	return 0;

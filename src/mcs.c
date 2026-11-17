@@ -83,6 +83,17 @@ static void mcs_failed(struct mcs_bridge *bridge, const char *what, int ret)
 }
 
 /*
+ * Turn snooping off again: the bridge then floods as usual, which is safe,
+ * whereas snooping with a stale flood table would black-hole groups.
+ * The next refresh sets everything up again.
+ */
+static void mcs_unconfigure(struct mcs_bridge *bridge)
+{
+	mcs_set_value(bridge->name, MCS_MSG_SET_ENABLE, 0);
+	bridge->configured = false;
+}
+
+/*
  * Enable snooping on a bridge. Groups without members keep being flooded as
  * the bridge would do, and the DSCP of snooped groups is left alone.
  */
@@ -99,7 +110,7 @@ static bool mcs_configure(struct mcs_bridge *bridge)
 	if ((ret = mcs_set_value(bridge->name, MCS_MSG_SET_POLICY, MCS_POLICY_FLOOD)) ||
 			(ret = mcs_set(bridge->name, MCS_MSG_SET_RETAG, &retag, sizeof(retag)))) {
 		/* The module defaults to dropping and remarking: do not leave it like that */
-		mcs_set_value(bridge->name, MCS_MSG_SET_ENABLE, 0);
+		mcs_unconfigure(bridge);
 		mcs_failed(bridge, "configuring snooping", ret);
 		return false;
 	}
@@ -172,6 +183,7 @@ static void mcs_refresh(struct mcs_bridge *bridge, const char *reason)
 
 		if (attempt || bridge->configured) {
 			mcs_failed(bridge, "reading the snooping table", ret);
+			mcs_unconfigure(bridge);
 			return;
 		}
 	}
@@ -181,6 +193,7 @@ static void mcs_refresh(struct mcs_bridge *bridge, const char *reason)
 
 	if ((ret = mcs_set(bridge->name, MCS_MSG_SET_PSW_FLOOD, flood, groups * sizeof(*flood)))) {
 		mcs_failed(bridge, "writing the flood table", ret);
+		mcs_unconfigure(bridge);
 		return;
 	}
 

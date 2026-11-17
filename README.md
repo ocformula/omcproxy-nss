@@ -1,3 +1,38 @@
+# omcproxy-nss
+
+This is [omcproxy](https://github.com/openwrt/omcproxy) with support for
+the multicast offload of Qualcomm NSS (IPQ806x) OpenWrt builds.
+
+The NSS ECM accelerates a multicast route only when it can get the ports of
+each bridged downlink from the `qca-mcs` snooping module, and `qca-mcs`
+answers from flood tables that user space has to provide. omcproxy-nss
+enables `qca-mcs` on the bridges it proxies to, reads the groups that
+`qca-mcs` snoops and keeps one flood entry per group with the ports that
+have members. Interfaces are taken from the omcproxy configuration, nothing
+is tied to particular names.
+
+It also fixes two problems of omcproxy itself:
+- the routes of a group are re-evaluated when its membership changes, so a
+  stream that arrives before its first receiver (e.g. after a restart) is
+  forwarded right away instead of after the route expires
+- more than one proxy (e.g. one for IPv4 and one for IPv6) can be set
+
+Requirements:
+- `kmod-qca-mcs`
+- an ECM that does not hold multicast flows back with `accel_delay_pkts`,
+  see the `qca-nss-ecm` patch in
+  https://github.com/ocformula/nss-packages (branch NSS-11.2-K5.15)
+
+Building for OpenWrt: add this repository as a feed and select
+`omcproxy-nss`, which replaces the `omcproxy` package and uses the same
+configuration (`/etc/config/omcproxy`):
+
+    src-git omcproxy_nss https://github.com/ocformula/omcproxy-nss.git
+
+Host unit tests: `LIBUBOX_DIR=<dir containing libubox/> sh tests/run.sh`
+
+The original README follows.
+
 # omcproxy - Embedded IGMPv3 and MLDv2 proxy
 
 omcproxy is an IGMPv3 and MLDv2 multicast proxy for use in embedded Linux

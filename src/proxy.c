@@ -22,6 +22,7 @@
 #include "client.h"
 #include "mrib.h"
 #include "proxy.h"
+#include "mcs.h"
 
 struct proxy {
 	struct list_head head;
@@ -43,6 +44,7 @@ static struct list_head proxies = LIST_HEAD_INIT(proxies);
 // Remove and cleanup a downlink
 static void proxy_remove_downlink(struct proxy_downlink *downlink)
 {
+	mcs_detach(downlink->iface.iface->ifindex);
 	mrib_detach_user(&downlink->mrib);
 	querier_detach(&downlink->iface);
 	client_deinit(&downlink->client);
@@ -187,6 +189,9 @@ int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum prox
 		if (mrib_attach_user(&downlink->mrib, downlinks[i], NULL))
 			goto downlink_err2;
 
+		// Snooping has to be on before the querier asks for members
+		mcs_attach(downlinks[i]);
+
 		if (querier_attach(&downlink->iface, &proxy->querier, downlinks[i], proxy_trigger))
 			goto downlink_err1;
 
@@ -194,6 +199,7 @@ int proxy_set(int uplink, const int downlinks[], size_t downlinks_cnt, enum prox
 		continue;
 
 downlink_err1:
+		mcs_detach(downlinks[i]);
 		mrib_detach_user(&downlink->mrib);
 downlink_err2:
 		client_deinit(&downlink->client);

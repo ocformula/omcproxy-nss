@@ -28,6 +28,7 @@
 
 #include "omcproxy.h"
 #include "proxy.h"
+#include "mcs.h"
 
 int log_level = LOG_WARNING;
 
@@ -136,6 +137,7 @@ int main(int argc, char **argv) {
 	}
 
 	uloop_init();
+	mcs_init();
 	bool start = true;
 
 	for (ssize_t i = 1; i < argc; ++i) {
@@ -191,6 +193,7 @@ int main(int argc, char **argv) {
 
 	proxy_update(true);
 	proxy_flush();
+	mcs_deinit();
 
 	uloop_done();
 	return 0;
